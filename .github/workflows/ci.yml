@@ -1,0 +1,52 @@
+name: Run CI
+on:
+  push:
+    branches: [main, 'feat/*']
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version: ['8.1', '8.2', '8.3', '8.4']
+        os: [ubuntu-latest, windows-latest]
+        use-lowest-dependencies: [true, false]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@e6f75134d35752277f093989e72e140eaa222f35
+        with:
+          php-version: ${{ matrix.php-version }}
+          tools: composer:v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        shell: bash
+        run: composer install --no-progress
+
+      - name: Downgrade to lowest versions
+        if: ${{ matrix.use-lowest-dependencies }}
+        shell: bash
+        run: composer update --prefer-lowest --prefer-stable
+
+      - name: Run unit tests
+        shell: bash
+        run: composer test
+
+      - name: Run psalm
+        shell: bash
+        run: composer psalm
+
+      - name: Run cs-check
+        shell: bash
+        run: composer cs-check
