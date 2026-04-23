@@ -20,8 +20,18 @@ use OpenTelemetry\Context\Context;
  * When a LaunchDarkly SDK variation call runs inside an active OpenTelemetry
  * span, this hook attaches a `feature_flag` span event carrying the required
  * semantic-convention attributes (`feature_flag.key`,
- * `feature_flag.provider.name`, `feature_flag.context.id`). When no span is
- * active, the hook is a no-op.
+ * `feature_flag.provider.name`, `feature_flag.context.id`) as well as any
+ * enabled optional attributes:
+ *
+ *   - `feature_flag.result.value` when
+ *     {@see TracingHookOptions::$includeValue} is true. The value is
+ *     serialized per {@see self::serializeValue()}.
+ *   - `feature_flag.result.variationIndex` when the evaluation produced a
+ *     variation index (emitted as an integer primitive).
+ *   - `feature_flag.result.reason.inExperiment` when the evaluation reason
+ *     is part of an experiment. Omitted when false, per spec §1.2.2.10.1.
+ *
+ * When no span is active, the hook is a no-op.
  *
  * The hook is registered on an `LDClient` via the SDK's hooks configuration
  * and is safe to share across threads/requests.
@@ -44,11 +54,9 @@ final class TracingHook extends Hook
     private readonly TracerInterface $tracer;
 
     /**
-     * Stored for future use — later stages will consult the options (for
-     * example, to decide whether to include the evaluated value on the span
-     * event). Currently inert in this PR.
-     *
-     * @psalm-suppress UnusedProperty
+     * Configuration object controlling the optional attributes emitted on the
+     * `feature_flag` span event. Consulted on every call to
+     * {@see self::afterEvaluation()}.
      */
     private readonly TracingHookOptions $options;
 
@@ -92,12 +100,79 @@ final class TracingHook extends Hook
             return $data;
         }
 
-        $span->addEvent(self::EVENT_NAME, [
+        /** @var array<string, mixed> $attributes */
+        $attributes = [
             Attributes::FEATURE_FLAG_KEY           => $seriesContext->flagKey,
             Attributes::FEATURE_FLAG_PROVIDER_NAME => Attributes::PROVIDER_NAME,
             Attributes::FEATURE_FLAG_CONTEXT_ID    => $seriesContext->context->getFullyQualifiedKey(),
-        ]);
+        ];
+
+        // Spec §1.2.2.6 / §1.2.2.7 / §1.2.2.8: optional serialized flag value,
+        // gated on the `includeValue` option.
+        if ($this->options->includeValue) {
+            $attributes[Attributes::FEATURE_FLAG_RESULT_VALUE] = self::serializeValue($detail->getValue());
+        }
+
+        // Spec §1.2.2.10 / §1.2.2.10.1: emit the variation index as an integer
+        // whenever present (including 0). Null means "default value was
+        // returned" and the attribute must be omitted.
+        $variationIndex = $detail->getVariationIndex();
+        if ($variationIndex !== null) {
+            $attributes[Attributes::FEATURE_FLAG_RESULT_VARIATION_INDEX] = $variationIndex;
+        }
+
+        // Spec §1.2.2.11 / §1.2.2.11.1: emit only when `inExperiment` is
+        // true. When false, the attribute must be omitted entirely (do not
+        // emit `false`).
+        if ($detail->getReason()->isInExperiment()) {
+            $attributes[Attributes::FEATURE_FLAG_RESULT_REASON_IN_EXPERIMENT] = true;
+        }
+
+        $span->addEvent(self::EVENT_NAME, $attributes);
 
         return $data;
+    }
+
+    /**
+     * Serialize an evaluated flag value into a string suitable for the
+     * `feature_flag.result.value` span-event attribute.
+     *
+     * The rules are (item B of the epic plan):
+     *
+     *   - `bool` → the literal strings `"true"` / `"false"`
+     *   - `int` or `float` → `(string) $value`
+     *   - `string` → returned as-is (including the empty string)
+     *   - `null` → the literal 4-character string `"null"`
+     *   - `array` or `object` → `json_encode($value, JSON_THROW_ON_ERROR)`,
+     *     falling back to `"null"` on encode failure
+     *   - anything else (resource, closure, etc.) → `"null"`
+     */
+    private static function serializeValue(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+
+        if (is_string($value)) {
+            return $value;
+        }
+
+        if ($value === null) {
+            return 'null';
+        }
+
+        if (is_array($value) || is_object($value)) {
+            try {
+                return json_encode($value, JSON_THROW_ON_ERROR);
+            } catch (\Throwable) {
+                return 'null';
+            }
+        }
+
+        return 'null';
     }
 }
