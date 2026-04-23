@@ -39,13 +39,19 @@ use PHPUnit\Framework\TestCase;
  *   §1.2.2.6   -- `feature_flag.result.value` gated by option.    (testValueAttribute..., testSerialize*)
  *   §1.2.2.7   -- `value` attribute is a string.                  (testSerialize* cases)
  *   §1.2.2.8   -- value encodes the evaluated flag value.         (testSerialize* cases)
+ *   §1.2.2.9   -- `feature_flag.set.id` optional attribute.       (testEnvironmentId*)
+ *   §1.2.2.9.1 -- emitted from TracingHookOptions when set.       (testEnvironmentIdEmittedWhenConfigured)
+ *   §1.2.2.9.1.1 -- attribute value matches configured input.     (testEnvironmentIdEmittedWhenConfigured)
  *   §1.2.2.10  -- `variationIndex` present when non-null.         (testVariationIndex*)
  *   §1.2.2.10.1 -- `variationIndex` type is int.                  (testVariationIndexIsInteger)
  *   §1.2.2.11  -- `reason.inExperiment` present when true.        (testInExperimentEmittedWhenTrue)
  *   §1.2.2.11.1 -- omitted when false (not emitted as `false`).   (testInExperimentOmittedWhenFalse)
  *
- * `feature_flag.set.id` (§1.2.2.9 and subclauses) is not yet emitted and
- * is not covered here.
+ * Known gap: §1.2.2.9.2 (per-evaluation environment ID supplied via
+ * `EvaluationSeriesContext`) is not implemented because the PHP SDK's
+ * `EvaluationSeriesContext` does not yet carry an environment ID. The
+ * absence of an emission on that path is covered indirectly by the
+ * options-driven tests below, which are the only supported source today.
  */
 class TracingHookTest extends TestCase
 {
@@ -387,6 +393,124 @@ class TracingHookTest extends TestCase
             Attributes::FEATURE_FLAG_RESULT_VARIATION_INDEX  => 2,
             Attributes::FEATURE_FLAG_RESULT_REASON_IN_EXPERIMENT => true,
         ], $attrs);
+    }
+
+    // -----------------------------------------------------------------
+    // feature_flag.set.id (spec §1.2.2.9 / §1.2.2.9.1 / §1.2.2.9.1.1).
+    //
+    // Only the options-sourced path is supported. §1.2.2.9.2 (per-evaluation
+    // environment ID via EvaluationSeriesContext) is a known gap documented
+    // at the top of this file; we verify it by exercising the supported
+    // path and asserting the absence of the attribute when no environmentId
+    // is configured.
+    // -----------------------------------------------------------------
+
+    /**
+     * Spec §1.2.2.9, §1.2.2.9.1, §1.2.2.9.1.1.
+     *
+     * With `environmentId` configured and all other optional attributes
+     * disabled, the event carries exactly the three required attributes plus
+     * `feature_flag.set.id` with the configured value.
+     */
+    public function testEnvironmentIdEmittedWhenConfigured(): void
+    {
+        $ctx   = LDContext::create('user-abc');
+        $attrs = $this->captureEventAttributes(
+            new TracingHookOptions(environmentId: 'env-abc123'),
+            $this->detail(value: true, idx: null, reason: EvaluationReason::off()),
+            $ctx,
+        );
+
+        $this->assertSame([
+            Attributes::FEATURE_FLAG_KEY           => 'my-flag',
+            Attributes::FEATURE_FLAG_PROVIDER_NAME => 'LaunchDarkly',
+            Attributes::FEATURE_FLAG_CONTEXT_ID    => $ctx->getFullyQualifiedKey(),
+            Attributes::FEATURE_FLAG_SET_ID        => 'env-abc123',
+        ], $attrs);
+    }
+
+    /**
+     * Spec §1.2.2.9, §1.2.2.9.1.
+     *
+     * Default options do not configure an environment ID, so the
+     * `feature_flag.set.id` attribute must be omitted entirely.
+     */
+    public function testEnvironmentIdOmittedByDefault(): void
+    {
+        $attrs = $this->captureEventAttributes(
+            new TracingHookOptions(),
+            $this->detail(value: true, idx: null, reason: EvaluationReason::off()),
+        );
+
+        $this->assertArrayNotHasKey(Attributes::FEATURE_FLAG_SET_ID, $attrs);
+    }
+
+    /**
+     * Spec §1.2.2.9.1 (cross-module contract with options validation).
+     *
+     * An empty-string environmentId is discarded by the TracingHookOptions
+     * constructor and stored as null. The hook must therefore emit no
+     * `feature_flag.set.id` attribute — anchoring the integration between
+     * options-validation and hook-emission.
+     */
+    public function testEnvironmentIdOmittedWhenEmptyStringDiscardedByOptions(): void
+    {
+        $attrs = $this->captureEventAttributes(
+            new TracingHookOptions(environmentId: ''),
+            $this->detail(value: true, idx: null, reason: EvaluationReason::off()),
+        );
+
+        $this->assertArrayNotHasKey(Attributes::FEATURE_FLAG_SET_ID, $attrs);
+    }
+
+    /**
+     * Spec §1.2.2.9.1, §1.2.2.6, §1.2.2.10, §1.2.2.11.
+     *
+     * Full combo: environmentId configured, includeValue on, a non-null
+     * variation index, and an experiment-reason. The event carries all seven
+     * attributes simultaneously.
+     */
+    public function testAllAttributesIncludingSetIdEmittedTogether(): void
+    {
+        $ctx   = LDContext::create('user-abc');
+        $attrs = $this->captureEventAttributes(
+            new TracingHookOptions(includeValue: true, environmentId: 'env-xyz'),
+            $this->detail(
+                value: 'blue',
+                idx: 2,
+                reason: EvaluationReason::ruleMatch(1, 'rule-id', true),
+            ),
+            $ctx,
+        );
+
+        $this->assertSame([
+            Attributes::FEATURE_FLAG_KEY                         => 'my-flag',
+            Attributes::FEATURE_FLAG_PROVIDER_NAME               => 'LaunchDarkly',
+            Attributes::FEATURE_FLAG_CONTEXT_ID                  => $ctx->getFullyQualifiedKey(),
+            Attributes::FEATURE_FLAG_RESULT_VALUE                => 'blue',
+            Attributes::FEATURE_FLAG_RESULT_VARIATION_INDEX      => 2,
+            Attributes::FEATURE_FLAG_RESULT_REASON_IN_EXPERIMENT => true,
+            Attributes::FEATURE_FLAG_SET_ID                      => 'env-xyz',
+        ], $attrs);
+    }
+
+    /**
+     * Spec §1.2.2.1.1 precedence over §1.2.2.9.1.
+     *
+     * The no-active-span rule wins over every attribute-emission gate: even
+     * with `environmentId` configured, a call without an active span must
+     * produce no span and no event at all.
+     */
+    public function testNoActiveSpanWithEnvironmentIdStillDoesNothing(): void
+    {
+        $hook = new TracingHook(
+            new TracingHookOptions(environmentId: 'env-abc'),
+            $this->tracer,
+        );
+
+        $hook->afterEvaluation($this->seriesContext(), [], $this->detail());
+
+        $this->assertSame([], $this->storage->getArrayCopy());
     }
 
     // -----------------------------------------------------------------
