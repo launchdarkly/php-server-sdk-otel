@@ -1,0 +1,23 @@
+* text=auto eol=lf
+
+# Path-based git attributes
+# https://git-scm.com/docs/gitattributes
+
+# Ignore all test and documentation with "export-ignore".
+/.gitattributes                 export-ignore
+/.github                        export-ignore
+/.gitignore                     export-ignore
+/.php-cs-fixer.php              export-ignore
+/.release-please-manifest.json  export-ignore
+/CHANGELOG.md                   export-ignore
+/CODEOWNERS                     export-ignore
+/CONTRIBUTING.md                export-ignore
+/Makefile                       export-ignore
+/RELEASE.md                     export-ignore
+/SECURITY.md                    export-ignore
+/docs                           export-ignore
+/examples                       export-ignore
+/phpunit.xml                    export-ignore
+/psalm.xml                      export-ignore
+/release-please-config.json     export-ignore
+/tests                          export-ignore
