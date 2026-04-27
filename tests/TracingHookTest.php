@@ -28,35 +28,8 @@ use PHPUnit\Framework\TestCase;
  * `InMemoryExporter` via `SimpleSpanProcessor`, runs the hook, then asserts
  * against the captured spans/events.
  *
- * Spec coverage map (LaunchDarkly OTEL integration spec):
- *   §1.2.1     -- Hook class is exported.                         (file existence / class usage)
- *   §1.2.2.1   -- `afterEvaluation` attaches an event to span.    (testActiveSpanReceivesFeatureFlagEvent...)
- *   §1.2.2.1.1 -- no active / invalid span → no-op.               (testNoActiveSpan..., testInvalidSpanContext...)
- *   §1.2.2.2   -- event name is `feature_flag`.                   (testActiveSpanReceivesFeatureFlagEvent...)
- *   §1.2.2.3   -- `feature_flag.key` present.                     (testActiveSpanReceivesFeatureFlagEvent...)
- *   §1.2.2.4   -- `feature_flag.provider.name` = `LaunchDarkly`.  (testActiveSpanReceivesFeatureFlagEvent...)
- *   §1.2.2.5   -- `feature_flag.context.id` = canonical key.      (testActiveSpanReceivesFeatureFlagEvent...)
- *   §1.2.2.6   -- `feature_flag.result.value` gated by option.    (testValueAttribute..., testSerialize*)
- *   §1.2.2.7   -- `value` attribute is a string.                  (testSerialize* cases)
- *   §1.2.2.8   -- value encodes the evaluated flag value.         (testSerialize* cases)
- *   §1.2.2.9   -- `feature_flag.set.id` optional attribute.       (testEnvironmentId*)
- *   §1.2.2.9.1 -- emitted from TracingHookOptions when set.       (testEnvironmentIdEmittedWhenConfigured)
- *   §1.2.2.9.1.1 -- attribute value matches configured input.     (testEnvironmentIdEmittedWhenConfigured)
- *   §1.2.2.10  -- `variationIndex` present when non-null.         (testVariationIndex*)
- *   §1.2.2.10.1 -- `variationIndex` type is int.                  (testVariationIndexIsInteger)
- *   §1.2.2.11  -- `reason.inExperiment` present when true.        (testInExperimentEmittedWhenTrue)
- *   §1.2.2.11.1 -- omitted when false (not emitted as `false`).   (testInExperimentOmittedWhenFalse)
- *   §1.2.3.1   -- `addSpans=false` is a no-op in beforeEvaluation.(testBeforeEvaluationIsNoOpWhenAddSpansDisabled)
- *   §1.2.3.2   -- feature_flag event attaches to caller's span.   (testFeatureFlagEventAttachesToParentSpanNotWrapper)
- *   §1.2.3.3   -- wrapper span parents correctly or roots alone.  (testAddSpansCreatesChildSpanParentedToActiveSpan,
- *                                                                  testAddSpansCreatesRootSpanWhenNoActiveSpan)
- *   §1.2.3.4   -- feature_flag.key on wrapper span.               (testAddSpansCreatesChildSpanParentedToActiveSpan)
- *   §1.2.3.5   -- feature_flag.context.id on wrapper span.        (testAddSpansCreatesChildSpanParentedToActiveSpan)
- *   §1.2.3.6   -- span name is `LDClient.<method>`.               (testAddSpansSpanNameMatchesMethod*)
- *   §1.2.3.7   -- wrapper span is ended in afterEvaluation.       (testWrapperSpanIsEndedBeforeEventWrite)
- *
- * Known gap: §1.2.2.9.2 (per-evaluation environment ID supplied via
- * `EvaluationSeriesContext`) is not implemented because the PHP SDK's
+ * Known gap: a per-evaluation environment ID supplied via
+ * `EvaluationSeriesContext` is not implemented because the PHP SDK's
  * `EvaluationSeriesContext` does not yet carry an environment ID. The
  * absence of an emission on that path is covered indirectly by the
  * options-driven tests below, which are the only supported source today.
@@ -137,8 +110,6 @@ class TracingHookTest extends TestCase
     // -----------------------------------------------------------------
 
     /**
-     * Spec §1.2.1, §1.2.2.1, §1.2.2.2, §1.2.2.3, §1.2.2.4, §1.2.2.5.
-     *
      * With a valid active span, `afterEvaluation` attaches a single
      * `feature_flag` event carrying exactly the three required attributes.
      */
@@ -176,8 +147,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.1.1.
-     *
      * With no active span, the hook is a no-op: no exception, no span or
      * event is ever exported.
      */
@@ -191,8 +160,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.1.1.
-     *
      * When the "active" span is the OpenTelemetry invalid span (a
      * NonRecordingSpan with an invalid SpanContext), the hook must not emit
      * an event. This is the no-op contract end-to-end.
@@ -244,8 +211,6 @@ class TracingHookTest extends TestCase
     // -----------------------------------------------------------------
 
     /**
-     * Spec §1.2.2.6, §1.2.2.10, §1.2.2.11.
-     *
      * With the default options, no variation index, and an `off` reason
      * (inExperiment=false), none of the optional attributes are emitted.
      */
@@ -266,8 +231,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.6.
-     *
      * When `includeValue=true` and all other optional attributes are absent,
      * the event carries the three required attributes plus `result.value`.
      */
@@ -285,8 +248,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.10.
-     *
      * Non-null `variationIndex` is emitted even when `includeValue=false` and
      * the reason is not an experiment. No value or inExperiment attributes.
      */
@@ -304,8 +265,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.10.
-     *
      * Regression guard: `variationIndex=0` is the first variation, not the
      * default. It MUST be emitted. (Ruby has a truthy-check bug here; we
      * don't.)
@@ -322,8 +281,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.10.1.
-     *
      * `variationIndex` is emitted as an int primitive, not a stringified form.
      */
     public function testVariationIndexIsInteger(): void
@@ -340,8 +297,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.11.
-     *
      * A fallthrough reason with `inExperiment=true` causes the optional
      * attribute to be emitted with the literal boolean `true`.
      */
@@ -359,8 +314,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.11.1.
-     *
      * When `inExperiment=false`, the attribute is omitted entirely — the hook
      * MUST NOT emit `inExperiment=false`. Asserted via `assertArrayNotHasKey`.
      */
@@ -375,8 +328,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.6, §1.2.2.10, §1.2.2.11.
-     *
      * All three optional attributes fire simultaneously when their respective
      * gates are true. Event should have all six attributes.
      */
@@ -404,18 +355,16 @@ class TracingHookTest extends TestCase
     }
 
     // -----------------------------------------------------------------
-    // feature_flag.set.id (spec §1.2.2.9 / §1.2.2.9.1 / §1.2.2.9.1.1).
+    // feature_flag.set.id.
     //
-    // Only the options-sourced path is supported. §1.2.2.9.2 (per-evaluation
-    // environment ID via EvaluationSeriesContext) is a known gap documented
-    // at the top of this file; we verify it by exercising the supported
-    // path and asserting the absence of the attribute when no environmentId
-    // is configured.
+    // Only the options-sourced path is supported. The per-evaluation path
+    // (environment ID via EvaluationSeriesContext) is a known gap
+    // documented at the top of this file; we verify it by exercising the
+    // supported path and asserting the absence of the attribute when no
+    // environmentId is configured.
     // -----------------------------------------------------------------
 
     /**
-     * Spec §1.2.2.9, §1.2.2.9.1, §1.2.2.9.1.1.
-     *
      * With `environmentId` configured and all other optional attributes
      * disabled, the event carries exactly the three required attributes plus
      * `feature_flag.set.id` with the configured value.
@@ -438,8 +387,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.9, §1.2.2.9.1.
-     *
      * Default options do not configure an environment ID, so the
      * `feature_flag.set.id` attribute must be omitted entirely.
      */
@@ -454,7 +401,7 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.9.1 (cross-module contract with options validation).
+     * Cross-module contract with options validation.
      *
      * An empty-string environmentId is discarded by the TracingHookOptions
      * constructor and stored as null. The hook must therefore emit no
@@ -472,8 +419,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.9.1, §1.2.2.6, §1.2.2.10, §1.2.2.11.
-     *
      * Full combo: environmentId configured, includeValue on, a non-null
      * variation index, and an experiment-reason. The event carries all seven
      * attributes simultaneously.
@@ -503,8 +448,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.2.1.1 precedence over §1.2.2.9.1.
-     *
      * The no-active-span rule wins over every attribute-emission gate: even
      * with `environmentId` configured, a call without an active span must
      * produce no span and no event at all.
@@ -525,9 +468,8 @@ class TracingHookTest extends TestCase
     // Per-PHP-type serialization of feature_flag.result.value, end-to-end
     // via afterEvaluation.
     //
-    // Spec §1.2.2.6, §1.2.2.7, §1.2.2.8. Each test goes through the live
-    // hook so the assertion is against the captured span event, not a
-    // direct helper invocation.
+    // Each test goes through the live hook so the assertion is against the
+    // captured span event, not a direct helper invocation.
     // -----------------------------------------------------------------
 
     /**
@@ -616,9 +558,9 @@ class TracingHookTest extends TestCase
     // -----------------------------------------------------------------
 
     /**
-     * Spec §1.2.2.6 (robustness). A resource inside an array trips
-     * `json_encode`; the serializer must swallow the exception and fall back
-     * to the literal string `"null"`.
+     * Robustness: a resource inside an array trips `json_encode`; the
+     * serializer must swallow the exception and fall back to the literal
+     * string `"null"`.
      */
     public function testSerializeEncodeFailureReturnsNull(): void
     {
@@ -663,7 +605,7 @@ class TracingHookTest extends TestCase
     }
 
     // -----------------------------------------------------------------
-    // Experimental `addSpans` feature (spec §1.2.3.*).
+    // Experimental `addSpans` feature.
     //
     // When `addSpans=true`, `beforeEvaluation` wraps each variation call in
     // its own `LDClient.<method>` span. `afterEvaluation` must detach that
@@ -752,8 +694,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.3.1.
-     *
      * With `addSpans=false` (the default), `beforeEvaluation` is a pass
      * through: returned `$data` is unchanged, no stash keys are added, and
      * no wrapper span is created. The hook must not emit a span from
@@ -788,8 +728,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.3.3, §1.2.3.4, §1.2.3.5.
-     *
      * With `addSpans=true` inside an active parent span, `beforeEvaluation`
      * creates a wrapper span parented to the caller's span. The wrapper
      * carries exactly two attributes (`feature_flag.key`,
@@ -809,7 +747,7 @@ class TracingHookTest extends TestCase
         // Wrapper name is the documented method-prefixed form.
         $this->assertSame('LDClient.variation', $wrapper->getName());
 
-        // Wrapper attributes are exactly the two required by spec §1.2.3.4-5.
+        // Wrapper attributes are exactly the two required ones.
         $this->assertSame(
             [
                 Attributes::FEATURE_FLAG_KEY        => 'my-flag',
@@ -820,8 +758,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.3.3.
-     *
      * With `addSpans=true` and no active parent span, `beforeEvaluation`
      * still creates a wrapper span; it becomes a root span. The wrapper's
      * attributes are still exactly the two required ones.
@@ -846,14 +782,11 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.3.6.
-     *
      * Span name is `LDClient.<method>` with the raw method string taken
      * from the EvaluationSeriesContext. The PHP SDK supplies lowerCamel
      * method names, yielding `LDClient.variation`, `LDClient.variationDetail`,
-     * and `LDClient.migrationVariation`. This is a documented PHP-specific
-     * divergence from the spec examples' PascalCase; fixing the casing at
-     * the PHP SDK level is tracked separately.
+     * and `LDClient.migrationVariation`. Aligning the casing is a concern
+     * for the core PHP Server-Side SDK and is tracked separately.
      */
     public function testAddSpansSpanNameMatchesMethodVariation(): void
     {
@@ -874,8 +807,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.3.2.
-     *
      * The `feature_flag` event must attach to the caller's parent span,
      * NOT to our wrapper span. This is the pin that catches a broken
      * detach-end-read ordering in `afterEvaluation`: if the scope were
@@ -907,8 +838,6 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.3.7.
-     *
      * The wrapper span is ended during `afterEvaluation`. The in-memory
      * exporter only receives spans on end, so the wrapper's presence in
      * the storage array is itself a partial proof; we additionally assert
@@ -924,12 +853,11 @@ class TracingHookTest extends TestCase
     }
 
     /**
-     * Spec §1.2.3 (hygiene).
-     *
-     * The reserved `__ld_otel_span` and `__ld_otel_scope` keys used to
-     * thread state between `beforeEvaluation` and `afterEvaluation` MUST
-     * NOT leak out of `afterEvaluation`. Downstream hook stages (and other
-     * hooks in the chain) should never see OpenTelemetry objects in `$data`.
+     * Hygiene: the reserved `__ld_otel_span` and `__ld_otel_scope` keys
+     * used to thread state between `beforeEvaluation` and `afterEvaluation`
+     * MUST NOT leak out of `afterEvaluation`. Downstream hook stages (and
+     * other hooks in the chain) should never see OpenTelemetry objects in
+     * `$data`.
      */
     public function testDataKeysNotLeakedAfterAfterEvaluation(): void
     {
