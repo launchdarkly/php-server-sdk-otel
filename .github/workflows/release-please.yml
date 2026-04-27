@@ -1,0 +1,18 @@
+name: Run Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release-package:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write # Contents and pull-requests are for release-please to make releases.
+      pull-requests: write
+
+    steps:
+      - uses: googleapis/release-please-action@16a9c90856f42705d54a6fda1823352bdc62cf38 # v4.4.0
+        id: release
