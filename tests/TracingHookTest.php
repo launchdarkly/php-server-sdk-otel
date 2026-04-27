@@ -27,12 +27,6 @@ use PHPUnit\Framework\TestCase;
  * Each test brings up a fresh OpenTelemetry `TracerProvider` wired to an
  * `InMemoryExporter` via `SimpleSpanProcessor`, runs the hook, then asserts
  * against the captured spans/events.
- *
- * Known gap: a per-evaluation environment ID supplied via
- * `EvaluationSeriesContext` is not implemented because the PHP SDK's
- * `EvaluationSeriesContext` does not yet carry an environment ID. The
- * absence of an emission on that path is covered indirectly by the
- * options-driven tests below, which are the only supported source today.
  */
 class TracingHookTest extends TestCase
 {
@@ -56,13 +50,17 @@ class TracingHookTest extends TestCase
         $this->tracerProvider->shutdown();
     }
 
-    private function seriesContext(string $flagKey = 'my-flag', ?LDContext $ctx = null): EvaluationSeriesContext
-    {
+    private function seriesContext(
+        string $flagKey = 'my-flag',
+        ?LDContext $ctx = null,
+        ?string $environmentId = null,
+    ): EvaluationSeriesContext {
         return new EvaluationSeriesContext(
             flagKey: $flagKey,
             context: $ctx ?? LDContext::create('user-abc'),
             defaultValue: false,
             method: 'variation',
+            environmentId: $environmentId,
         );
     }
 
@@ -82,12 +80,17 @@ class TracingHookTest extends TestCase
         EvaluationDetail $detail,
         ?LDContext $ctx = null,
         string $flagKey = 'my-flag',
+        ?string $seriesContextEnvironmentId = null,
     ): array {
         $hook  = new TracingHook($options, $this->tracer);
         $span  = $this->tracer->spanBuilder('parent')->startSpan();
         $scope = $span->activate();
         try {
-            $hook->afterEvaluation($this->seriesContext($flagKey, $ctx), [], $detail);
+            $hook->afterEvaluation(
+                $this->seriesContext($flagKey, $ctx, $seriesContextEnvironmentId),
+                [],
+                $detail,
+            );
         } finally {
             $scope->detach();
             $span->end();
@@ -357,11 +360,10 @@ class TracingHookTest extends TestCase
     // -----------------------------------------------------------------
     // feature_flag.set.id.
     //
-    // Only the options-sourced path is supported. The per-evaluation path
-    // (environment ID via EvaluationSeriesContext) is a known gap
-    // documented at the top of this file; we verify it by exercising the
-    // supported path and asserting the absence of the attribute when no
-    // environmentId is configured.
+    // Two sources: TracingHookOptions::$environmentId (configuration) and
+    // EvaluationSeriesContext::$environmentId (per-evaluation, populated by
+    // the LaunchDarkly SDK from the X-Ld-Envid response header). The
+    // configuration path takes precedence when both are set.
     // -----------------------------------------------------------------
 
     /**
@@ -416,6 +418,46 @@ class TracingHookTest extends TestCase
         );
 
         $this->assertArrayNotHasKey(Attributes::FEATURE_FLAG_SET_ID, $attrs);
+    }
+
+    /**
+     * When the configuration does not supply an environment ID but the
+     * EvaluationSeriesContext does, the hook emits the series-context value
+     * as `feature_flag.set.id`.
+     */
+    public function testEnvironmentIdEmittedFromSeriesContextWhenOptionsAbsent(): void
+    {
+        $ctx   = LDContext::create('user-abc');
+        $attrs = $this->captureEventAttributes(
+            new TracingHookOptions(),
+            $this->detail(value: true, idx: null, reason: EvaluationReason::off()),
+            $ctx,
+            seriesContextEnvironmentId: 'env-from-context',
+        );
+
+        $this->assertSame([
+            Attributes::FEATURE_FLAG_KEY           => 'my-flag',
+            Attributes::FEATURE_FLAG_PROVIDER_NAME => 'LaunchDarkly',
+            Attributes::FEATURE_FLAG_CONTEXT_ID    => $ctx->getFullyQualifiedKey(),
+            Attributes::FEATURE_FLAG_SET_ID        => 'env-from-context',
+        ], $attrs);
+    }
+
+    /**
+     * When both the configuration and the EvaluationSeriesContext supply an
+     * environment ID, the configuration wins.
+     */
+    public function testOptionsEnvironmentIdTakesPrecedenceOverSeriesContext(): void
+    {
+        $ctx   = LDContext::create('user-abc');
+        $attrs = $this->captureEventAttributes(
+            new TracingHookOptions(environmentId: 'env-from-options'),
+            $this->detail(value: true, idx: null, reason: EvaluationReason::off()),
+            $ctx,
+            seriesContextEnvironmentId: 'env-from-context',
+        );
+
+        $this->assertSame('env-from-options', $attrs[Attributes::FEATURE_FLAG_SET_ID]);
     }
 
     /**

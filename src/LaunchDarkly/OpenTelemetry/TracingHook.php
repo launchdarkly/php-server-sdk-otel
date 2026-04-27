@@ -32,10 +32,12 @@ use OpenTelemetry\Context\ScopeInterface;
  *     variation index (emitted as an integer primitive).
  *   - `feature_flag.result.reason.inExperiment` when the evaluation reason
  *     is part of an experiment. Omitted when false.
- *   - `feature_flag.set.id` when {@see TracingHookOptions::$environmentId}
- *     is configured. Only the options-sourced path is supported; a
- *     per-evaluation path is not, because the PHP Server-Side SDK does not
- *     currently expose an environment ID on `EvaluationSeriesContext`.
+ *   - `feature_flag.set.id` when an environment ID is available, sourced
+ *     from {@see TracingHookOptions::$environmentId} when configured, or
+ *     otherwise from `EvaluationSeriesContext::$environmentId` (which the
+ *     LaunchDarkly SDK populates from polling-response metadata when
+ *     fetching directly from LaunchDarkly). The configuration path takes
+ *     precedence when both are set.
  *
  * When no span is active, the hook is a no-op.
  *
@@ -275,12 +277,16 @@ final class TracingHook extends Hook
             $attributes[Attributes::FEATURE_FLAG_RESULT_REASON_IN_EXPERIMENT] = true;
         }
 
-        // Emit the configured environment ID as `feature_flag.set.id`. The
-        // options constructor has already trimmed and rejected empty or
-        // whitespace-only inputs, so a non-null value here is guaranteed to
-        // be a usable non-empty string.
-        if ($this->options->environmentId !== null) {
-            $attributes[Attributes::FEATURE_FLAG_SET_ID] = $this->options->environmentId;
+        // Emit the environment ID as `feature_flag.set.id`. The
+        // configuration-supplied value takes precedence over the value
+        // carried on the EvaluationSeriesContext. The options constructor
+        // has already validated and trimmed the configuration path; the
+        // series-context value is provided by the LaunchDarkly SDK (which
+        // captures it from the X-Ld-Envid response header) and is emitted
+        // as-is.
+        $envId = $this->options->environmentId ?? $seriesContext->environmentId;
+        if ($envId !== null) {
+            $attributes[Attributes::FEATURE_FLAG_SET_ID] = $envId;
         }
 
         $span->addEvent(self::EVENT_NAME, $attributes);
