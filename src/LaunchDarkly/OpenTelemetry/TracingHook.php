@@ -31,12 +31,11 @@ use OpenTelemetry\Context\ScopeInterface;
  *   - `feature_flag.result.variationIndex` when the evaluation produced a
  *     variation index (emitted as an integer primitive).
  *   - `feature_flag.result.reason.inExperiment` when the evaluation reason
- *     is part of an experiment. Omitted when false, per spec §1.2.2.10.1.
+ *     is part of an experiment. Omitted when false.
  *   - `feature_flag.set.id` when {@see TracingHookOptions::$environmentId}
- *     is configured. Only the options-sourced path (spec §1.2.2.9.1) is
- *     supported; the per-evaluation path (§1.2.2.9.2) is not, because the
- *     PHP Server-Side SDK does not currently expose an environment ID on
- *     `EvaluationSeriesContext`.
+ *     is configured. Only the options-sourced path is supported; a
+ *     per-evaluation path is not, because the PHP Server-Side SDK does not
+ *     currently expose an environment ID on `EvaluationSeriesContext`.
  *
  * When no span is active, the hook is a no-op.
  *
@@ -143,8 +142,9 @@ final class TracingHook extends Hook
      * Experimental. When {@see TracingHookOptions::$addSpans} is enabled,
      * start a wrapper span named `LDClient.<method>` around the upcoming
      * variation call and attach its context so subsequent work is nested
-     * beneath it. The wrapper span carries only the two required attributes
-     * from spec §1.2.3.4–5 (`feature_flag.key` and `feature_flag.context.id`).
+     * beneath it. The wrapper span carries only `feature_flag.key` and
+     * `feature_flag.context.id`; all other attributes belong on the
+     * `feature_flag` event.
      *
      * The span and the scope used to detach its context are stashed under
      * {@see self::DATA_KEY_SPAN} and {@see self::DATA_KEY_SCOPE} in the
@@ -155,10 +155,8 @@ final class TracingHook extends Hook
      *
      * The span name is the raw PHP SDK method string (`variation`,
      * `variationDetail`, `migrationVariation`), which yields
-     * `LDClient.variation` and friends. This is a PHP-specific divergence
-     * from spec §1.2.3.6's PascalCase examples; aligning the method-name
-     * casing is a concern for the core PHP Server-Side SDK and is tracked
-     * separately.
+     * `LDClient.variation` and friends. Aligning the method-name casing is
+     * a concern for the core PHP Server-Side SDK and is tracked separately.
      *
      * @param array<string, mixed> $data
      * @return array<string, mixed>
@@ -198,13 +196,11 @@ final class TracingHook extends Hook
      *      reserved `$data` keys, detach the scope then end the wrapper
      *      span. This MUST happen before step 2 so the event below lands
      *      on the caller's surrounding span, not on our wrapper.
-     *   2. Look up the currently active span. Per spec §1.2.2.1.1, if the
-     *      span context is invalid (no active span, or a
-     *      `NonRecordingSpan` with an invalid context), return without
-     *      emitting anything.
+     *   2. Look up the currently active span. If the span context is
+     *      invalid (no active span, or a `NonRecordingSpan` with an
+     *      invalid context), return without emitting anything.
      *   3. Build the attribute map: the three required attributes always,
-     *      plus the optional attributes whose spec-defined gates are
-     *      satisfied (§1.2.2.6 / §1.2.2.9 / §1.2.2.10 / §1.2.2.11).
+     *      plus any optional attributes whose gates are satisfied.
      *   4. Call `Span::addEvent('feature_flag', $attributes)`.
      *
      * The reserved `$data` keys are removed before returning so downstream
@@ -227,15 +223,14 @@ final class TracingHook extends Hook
         array $data,
         EvaluationDetail $detail,
     ): array {
-        // Spec §1.2.3.2: if the experimental `addSpans` path started a
-        // wrapper span in `beforeEvaluation`, tear it down BEFORE looking up
-        // the current span. Detaching the scope pops the wrapper off the
-        // active context so the `feature_flag` event below attaches to the
-        // caller's surrounding span instead of the wrapper. The order
-        // (detach → end → read current span) matters — ending before
-        // detaching would leave a closed span on top of the active context,
-        // and reading the current span before detaching would return the
-        // wrapper itself.
+        // If the experimental `addSpans` path started a wrapper span in
+        // `beforeEvaluation`, tear it down BEFORE looking up the current
+        // span. Detaching the scope pops the wrapper off the active context
+        // so the `feature_flag` event below attaches to the caller's
+        // surrounding span instead of the wrapper. The order (detach → end
+        // → read current span) matters — ending before detaching would
+        // leave a closed span on top of the active context, and reading the
+        // current span before detaching would return the wrapper itself.
         if (isset($data[self::DATA_KEY_SPAN], $data[self::DATA_KEY_SCOPE])
             && $data[self::DATA_KEY_SPAN] instanceof SpanInterface
             && $data[self::DATA_KEY_SCOPE] instanceof ScopeInterface
@@ -247,9 +242,9 @@ final class TracingHook extends Hook
 
         $span = Span::fromContext(Context::getCurrent());
 
-        // Spec §1.2.2.1.1: if the surrounding span context is not valid (no
-        // active span, or the active span has an invalid context), the hook
-        // must not emit an event.
+        // If the surrounding span context is not valid (no active span, or
+        // the active span has an invalid context), the hook must not emit
+        // an event.
         if (!$span->getContext()->isValid()) {
             return $data;
         }
@@ -261,31 +256,29 @@ final class TracingHook extends Hook
             Attributes::FEATURE_FLAG_CONTEXT_ID    => $seriesContext->context->getFullyQualifiedKey(),
         ];
 
-        // Spec §1.2.2.6 / §1.2.2.7 / §1.2.2.8: optional serialized flag value,
-        // gated on the `includeValue` option.
+        // Optional serialized flag value, gated on the `includeValue` option.
         if ($this->options->includeValue) {
             $attributes[Attributes::FEATURE_FLAG_RESULT_VALUE] = self::serializeValue($detail->getValue());
         }
 
-        // Spec §1.2.2.10 / §1.2.2.10.1: emit the variation index as an integer
-        // whenever present (including 0). Null means "default value was
-        // returned" and the attribute must be omitted.
+        // Emit the variation index as an integer whenever present
+        // (including 0). Null means "default value was returned" and the
+        // attribute must be omitted.
         $variationIndex = $detail->getVariationIndex();
         if ($variationIndex !== null) {
             $attributes[Attributes::FEATURE_FLAG_RESULT_VARIATION_INDEX] = $variationIndex;
         }
 
-        // Spec §1.2.2.11 / §1.2.2.11.1: emit only when `inExperiment` is
-        // true. When false, the attribute must be omitted entirely (do not
-        // emit `false`).
+        // Emit only when `inExperiment` is true. When false, the attribute
+        // must be omitted entirely (do not emit `false`).
         if ($detail->getReason()->isInExperiment()) {
             $attributes[Attributes::FEATURE_FLAG_RESULT_REASON_IN_EXPERIMENT] = true;
         }
 
-        // Spec §1.2.2.9 / §1.2.2.9.1: emit the configured environment ID as
-        // `feature_flag.set.id`. The options constructor has already trimmed
-        // and rejected empty or whitespace-only inputs, so a non-null value
-        // here is guaranteed to be a usable non-empty string.
+        // Emit the configured environment ID as `feature_flag.set.id`. The
+        // options constructor has already trimmed and rejected empty or
+        // whitespace-only inputs, so a non-null value here is guaranteed to
+        // be a usable non-empty string.
         if ($this->options->environmentId !== null) {
             $attributes[Attributes::FEATURE_FLAG_SET_ID] = $this->options->environmentId;
         }

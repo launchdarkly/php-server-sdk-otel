@@ -150,8 +150,8 @@ Worker pools (RoadRunner, Swoole, and similar) keep the PHP process alive across
 
 ## Known limitations
 
-1. `feature_flag.set.id` is emitted only when the environment ID is supplied via `TracingHookOptions` (spec [§1.2.2.9.1][spec]). The per-evaluation path described in [§1.2.2.9.2][spec] — where the SDK would pass the environment ID through `EvaluationSeriesContext` — is not yet supported, because the LaunchDarkly PHP Server-Side SDK does not currently expose an environment ID on `EvaluationSeriesContext`. Configuring `environmentId` on the options is the supported way to emit `feature_flag.set.id` today.
-2. When `addSpans=true`, the wrapper span name is built from the PHP SDK method string (`variation`, `variationDetail`, `migrationVariation`), producing `LDClient.variation`, `LDClient.variationDetail`, and `LDClient.migrationVariation`. Spec [§1.2.3.6][spec] uses PascalCase method names in its examples; aligning the casing is a concern for the core PHP Server-Side SDK and is tracked separately.
+1. `feature_flag.set.id` is emitted only when the environment ID is supplied via `TracingHookOptions`. The alternative path — where the SDK would pass the environment ID through `EvaluationSeriesContext` per the [LaunchDarkly OTEL integration specification][spec] — is not yet supported, because the LaunchDarkly PHP Server-Side SDK does not currently expose an environment ID on `EvaluationSeriesContext`. Configuring `environmentId` on the options is the supported way to emit `feature_flag.set.id` today.
+2. When `addSpans=true`, the wrapper span name is built from the PHP SDK method string (`variation`, `variationDetail`, `migrationVariation`), producing `LDClient.variation`, `LDClient.variationDetail`, and `LDClient.migrationVariation`. Aligning the casing with other LaunchDarkly SDKs is a concern for the core PHP Server-Side SDK and is tracked separately.
 
 [spec]: https://github.com/launchdarkly/sdk-meta/blob/main/api/otel-integration.md
 

@@ -21,54 +21,49 @@ namespace LaunchDarkly\OpenTelemetry;
 final class Attributes
 {
     /**
-     * Key of the flag being evaluated (spec §1.2.2.3).
+     * Key of the flag being evaluated.
      */
     public const FEATURE_FLAG_KEY = 'feature_flag.key';
 
     /**
-     * Name of the feature flag provider; always {@see self::PROVIDER_NAME}
-     * (spec §1.2.2.4).
+     * Name of the feature flag provider; always {@see self::PROVIDER_NAME}.
      */
     public const FEATURE_FLAG_PROVIDER_NAME = 'feature_flag.provider.name';
 
     /**
-     * Canonical key of the `LDContext` the flag is being evaluated for
-     * (spec §1.2.2.5).
+     * Canonical key of the `LDContext` the flag is being evaluated for.
      */
     public const FEATURE_FLAG_CONTEXT_ID = 'feature_flag.context.id';
 
     /**
-     * Serialized evaluated flag value (spec §1.2.2.6–§1.2.2.8). Optional;
-     * emitted only when {@see TracingHookOptions::$includeValue} is
-     * `true`.
+     * Serialized evaluated flag value. Optional; emitted only when
+     * {@see TracingHookOptions::$includeValue} is `true`.
      */
     public const FEATURE_FLAG_RESULT_VALUE = 'feature_flag.result.value';
 
     /**
-     * Variation index of the evaluated flag as an integer (spec
-     * §1.2.2.10–§1.2.2.10.1). Emitted whenever the evaluation produced a
-     * non-null variation index, including the value `0`.
+     * Variation index of the evaluated flag as an integer. Emitted whenever
+     * the evaluation produced a non-null variation index, including the
+     * value `0`.
      */
     public const FEATURE_FLAG_RESULT_VARIATION_INDEX = 'feature_flag.result.variationIndex';
 
     /**
-     * `true` when the evaluation was part of an experiment (spec
-     * §1.2.2.11). Omitted entirely when the evaluation reason is not an
-     * experiment — never emitted as `false` (spec §1.2.2.11.1).
+     * `true` when the evaluation was part of an experiment. Omitted
+     * entirely when the evaluation reason is not an experiment — never
+     * emitted as `false`.
      */
     public const FEATURE_FLAG_RESULT_REASON_IN_EXPERIMENT = 'feature_flag.result.reason.inExperiment';
 
     /**
-     * Environment identifier for the LaunchDarkly project/environment
-     * (spec §1.2.2.9). Emitted only when
-     * {@see TracingHookOptions::$environmentId} is configured with a
-     * non-empty string (spec §1.2.2.9.1).
+     * Environment identifier for the LaunchDarkly project/environment.
+     * Emitted only when {@see TracingHookOptions::$environmentId} is
+     * configured with a non-empty string.
      */
     public const FEATURE_FLAG_SET_ID = 'feature_flag.set.id';
 
     /**
-     * Fixed value emitted for the `feature_flag.provider.name` attribute
-     * (spec §1.2.2.4).
+     * Fixed value emitted for the `feature_flag.provider.name` attribute.
      */
     public const PROVIDER_NAME = 'LaunchDarkly';
 
