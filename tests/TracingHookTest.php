@@ -46,6 +46,14 @@ use PHPUnit\Framework\TestCase;
  *   §1.2.2.10.1 -- `variationIndex` type is int.                  (testVariationIndexIsInteger)
  *   §1.2.2.11  -- `reason.inExperiment` present when true.        (testInExperimentEmittedWhenTrue)
  *   §1.2.2.11.1 -- omitted when false (not emitted as `false`).   (testInExperimentOmittedWhenFalse)
+ *   §1.2.3.1   -- `addSpans=false` is a no-op in beforeEvaluation.(testBeforeEvaluationIsNoOpWhenAddSpansDisabled)
+ *   §1.2.3.2   -- feature_flag event attaches to caller's span.   (testFeatureFlagEventAttachesToParentSpanNotWrapper)
+ *   §1.2.3.3   -- wrapper span parents correctly or roots alone.  (testAddSpansCreatesChildSpanParentedToActiveSpan,
+ *                                                                  testAddSpansCreatesRootSpanWhenNoActiveSpan)
+ *   §1.2.3.4   -- feature_flag.key on wrapper span.               (testAddSpansCreatesChildSpanParentedToActiveSpan)
+ *   §1.2.3.5   -- feature_flag.context.id on wrapper span.        (testAddSpansCreatesChildSpanParentedToActiveSpan)
+ *   §1.2.3.6   -- span name is `LDClient.<method>`.               (testAddSpansSpanNameMatchesMethod*)
+ *   §1.2.3.7   -- wrapper span is ended in afterEvaluation.       (testWrapperSpanIsEndedBeforeEventWrite)
  *
  * Known gap: §1.2.2.9.2 (per-evaluation environment ID supplied via
  * `EvaluationSeriesContext`) is not implemented because the PHP SDK's
@@ -652,5 +660,283 @@ class TracingHookTest extends TestCase
         /** @var string $result */
         $result = $method->invoke(null, $value);
         return $result;
+    }
+
+    // -----------------------------------------------------------------
+    // Experimental `addSpans` feature (spec §1.2.3.*).
+    //
+    // When `addSpans=true`, `beforeEvaluation` wraps each variation call in
+    // its own `LDClient.<method>` span. `afterEvaluation` must detach that
+    // span's context BEFORE attaching the `feature_flag` event so the event
+    // lands on the caller's surrounding span, not on the wrapper.
+    // -----------------------------------------------------------------
+
+    /**
+     * Runs a full before→after lifecycle inside a caller-supplied parent
+     * span so callers can verify the wrapper span's parenting and the
+     * `feature_flag` event's placement.
+     *
+     * @param  string $method Method name written into the EvaluationSeriesContext.
+     * @return array{parent: ImmutableSpan, wrapper: ImmutableSpan, afterData: array<string, mixed>}
+     */
+    private function runLifecycleWithParent(
+        TracingHookOptions $options,
+        string $method = 'variation',
+    ): array {
+        $hook = new TracingHook($options, $this->tracer);
+        $ctx  = LDContext::create('user-abc');
+        $sc   = new EvaluationSeriesContext(
+            flagKey: 'my-flag',
+            context: $ctx,
+            defaultValue: false,
+            method: $method,
+        );
+
+        $parent      = $this->tracer->spanBuilder('parent')->startSpan();
+        $parentScope = $parent->activate();
+        try {
+            $data      = $hook->beforeEvaluation($sc, []);
+            $afterData = $hook->afterEvaluation($sc, $data, $this->detail(true, null));
+        } finally {
+            $parentScope->detach();
+            $parent->end();
+        }
+
+        $spans = $this->storage->getArrayCopy();
+        // Exporter records spans in the order they end — wrapper first, parent second.
+        $this->assertCount(2, $spans);
+        $this->assertInstanceOf(ImmutableSpan::class, $spans[0]);
+        $this->assertInstanceOf(ImmutableSpan::class, $spans[1]);
+
+        $wrapper    = $spans[0];
+        $parentSpan = $spans[1];
+        $this->assertSame('parent', $parentSpan->getName());
+
+        return [
+            'parent'    => $parentSpan,
+            'wrapper'   => $wrapper,
+            'afterData' => $afterData,
+        ];
+    }
+
+    /**
+     * Runs a full before→after lifecycle with no caller-supplied parent
+     * span. The wrapper span should be a root span.
+     *
+     * @return array{wrapper: ImmutableSpan, afterData: array<string, mixed>}
+     */
+    private function runLifecycleNoParent(
+        TracingHookOptions $options,
+        string $method = 'variation',
+    ): array {
+        $hook = new TracingHook($options, $this->tracer);
+        $ctx  = LDContext::create('user-abc');
+        $sc   = new EvaluationSeriesContext(
+            flagKey: 'my-flag',
+            context: $ctx,
+            defaultValue: false,
+            method: $method,
+        );
+
+        $data      = $hook->beforeEvaluation($sc, []);
+        $afterData = $hook->afterEvaluation($sc, $data, $this->detail(true, null));
+
+        $spans = $this->storage->getArrayCopy();
+        $this->assertCount(1, $spans);
+        $this->assertInstanceOf(ImmutableSpan::class, $spans[0]);
+
+        return [
+            'wrapper'   => $spans[0],
+            'afterData' => $afterData,
+        ];
+    }
+
+    /**
+     * Spec §1.2.3.1.
+     *
+     * With `addSpans=false` (the default), `beforeEvaluation` is a pass
+     * through: returned `$data` is unchanged, no stash keys are added, and
+     * no wrapper span is created. The hook must not emit a span from
+     * `beforeEvaluation` alone.
+     */
+    public function testBeforeEvaluationIsNoOpWhenAddSpansDisabled(): void
+    {
+        $hook = new TracingHook(new TracingHookOptions(), $this->tracer);
+        $sc   = $this->seriesContext();
+
+        $parent      = $this->tracer->spanBuilder('parent')->startSpan();
+        $parentScope = $parent->activate();
+
+        $inputData = ['existing' => 'value'];
+        try {
+            $returned = $hook->beforeEvaluation($sc, $inputData);
+        } finally {
+            $parentScope->detach();
+            $parent->end();
+        }
+
+        // Returned data matches input; no stash keys added.
+        $this->assertSame($inputData, $returned);
+        $this->assertArrayNotHasKey('__ld_otel_span', $returned);
+        $this->assertArrayNotHasKey('__ld_otel_scope', $returned);
+
+        // Only the caller's parent span was exported.
+        $spans = $this->storage->getArrayCopy();
+        $this->assertCount(1, $spans);
+        $this->assertInstanceOf(ImmutableSpan::class, $spans[0]);
+        $this->assertSame('parent', $spans[0]->getName());
+    }
+
+    /**
+     * Spec §1.2.3.3, §1.2.3.4, §1.2.3.5.
+     *
+     * With `addSpans=true` inside an active parent span, `beforeEvaluation`
+     * creates a wrapper span parented to the caller's span. The wrapper
+     * carries exactly two attributes (`feature_flag.key`,
+     * `feature_flag.context.id`) — NOT the provider name, result.*, or
+     * set.id, all of which belong on the `feature_flag` event.
+     */
+    public function testAddSpansCreatesChildSpanParentedToActiveSpan(): void
+    {
+        $result  = $this->runLifecycleWithParent(new TracingHookOptions(addSpans: true));
+        $parent  = $result['parent'];
+        $wrapper = $result['wrapper'];
+
+        // Wrapper is parented to the caller's span.
+        $this->assertSame($parent->getSpanId(), $wrapper->getParentSpanId());
+        $this->assertSame($parent->getTraceId(), $wrapper->getTraceId());
+
+        // Wrapper name is the documented method-prefixed form.
+        $this->assertSame('LDClient.variation', $wrapper->getName());
+
+        // Wrapper attributes are exactly the two required by spec §1.2.3.4-5.
+        $this->assertSame(
+            [
+                Attributes::FEATURE_FLAG_KEY        => 'my-flag',
+                Attributes::FEATURE_FLAG_CONTEXT_ID => LDContext::create('user-abc')->getFullyQualifiedKey(),
+            ],
+            $wrapper->getAttributes()->toArray(),
+        );
+    }
+
+    /**
+     * Spec §1.2.3.3.
+     *
+     * With `addSpans=true` and no active parent span, `beforeEvaluation`
+     * still creates a wrapper span; it becomes a root span. The wrapper's
+     * attributes are still exactly the two required ones.
+     */
+    public function testAddSpansCreatesRootSpanWhenNoActiveSpan(): void
+    {
+        $result  = $this->runLifecycleNoParent(new TracingHookOptions(addSpans: true));
+        $wrapper = $result['wrapper'];
+
+        // Root span: the parent span context is invalid.
+        $this->assertFalse($wrapper->getParentContext()->isValid());
+
+        // Name and attributes are the same as the parented case.
+        $this->assertSame('LDClient.variation', $wrapper->getName());
+        $this->assertSame(
+            [
+                Attributes::FEATURE_FLAG_KEY        => 'my-flag',
+                Attributes::FEATURE_FLAG_CONTEXT_ID => LDContext::create('user-abc')->getFullyQualifiedKey(),
+            ],
+            $wrapper->getAttributes()->toArray(),
+        );
+    }
+
+    /**
+     * Spec §1.2.3.6.
+     *
+     * Span name is `LDClient.<method>` with the raw method string taken
+     * from the EvaluationSeriesContext. The PHP SDK supplies lowerCamel
+     * method names, yielding `LDClient.variation`, `LDClient.variationDetail`,
+     * and `LDClient.migrationVariation`. This is a documented PHP-specific
+     * divergence from the spec examples' PascalCase; fixing the casing at
+     * the PHP SDK level is tracked separately.
+     */
+    public function testAddSpansSpanNameMatchesMethodVariation(): void
+    {
+        $result = $this->runLifecycleNoParent(new TracingHookOptions(addSpans: true), 'variation');
+        $this->assertSame('LDClient.variation', $result['wrapper']->getName());
+    }
+
+    public function testAddSpansSpanNameMatchesMethodVariationDetail(): void
+    {
+        $result = $this->runLifecycleNoParent(new TracingHookOptions(addSpans: true), 'variationDetail');
+        $this->assertSame('LDClient.variationDetail', $result['wrapper']->getName());
+    }
+
+    public function testAddSpansSpanNameMatchesMethodMigrationVariation(): void
+    {
+        $result = $this->runLifecycleNoParent(new TracingHookOptions(addSpans: true), 'migrationVariation');
+        $this->assertSame('LDClient.migrationVariation', $result['wrapper']->getName());
+    }
+
+    /**
+     * Spec §1.2.3.2.
+     *
+     * The `feature_flag` event must attach to the caller's parent span,
+     * NOT to our wrapper span. This is the pin that catches a broken
+     * detach-end-read ordering in `afterEvaluation`: if the scope were
+     * detached after the event emission (or not at all), the current span
+     * at emission time would be the wrapper and the event would land on it.
+     */
+    public function testFeatureFlagEventAttachesToParentSpanNotWrapper(): void
+    {
+        $result  = $this->runLifecycleWithParent(new TracingHookOptions(addSpans: true));
+        $parent  = $result['parent'];
+        $wrapper = $result['wrapper'];
+
+        // Event is on the parent, exactly one.
+        $parentEvents = $parent->getEvents();
+        $this->assertCount(1, $parentEvents);
+        $this->assertSame('feature_flag', $parentEvents[0]->getName());
+
+        // Required attributes present on the parent's event.
+        $eventAttrs = $parentEvents[0]->getAttributes()->toArray();
+        $this->assertSame('my-flag', $eventAttrs[Attributes::FEATURE_FLAG_KEY]);
+        $this->assertSame('LaunchDarkly', $eventAttrs[Attributes::FEATURE_FLAG_PROVIDER_NAME]);
+        $this->assertSame(
+            LDContext::create('user-abc')->getFullyQualifiedKey(),
+            $eventAttrs[Attributes::FEATURE_FLAG_CONTEXT_ID],
+        );
+
+        // Wrapper has NO events of its own.
+        $this->assertCount(0, $wrapper->getEvents());
+    }
+
+    /**
+     * Spec §1.2.3.7.
+     *
+     * The wrapper span is ended during `afterEvaluation`. The in-memory
+     * exporter only receives spans on end, so the wrapper's presence in
+     * the storage array is itself a partial proof; we additionally assert
+     * the recorded end time is non-zero and `hasEnded()` is true.
+     */
+    public function testWrapperSpanIsEndedBeforeEventWrite(): void
+    {
+        $result  = $this->runLifecycleWithParent(new TracingHookOptions(addSpans: true));
+        $wrapper = $result['wrapper'];
+
+        $this->assertTrue($wrapper->hasEnded());
+        $this->assertGreaterThan(0, $wrapper->getEndEpochNanos());
+    }
+
+    /**
+     * Spec §1.2.3 (hygiene).
+     *
+     * The reserved `__ld_otel_span` and `__ld_otel_scope` keys used to
+     * thread state between `beforeEvaluation` and `afterEvaluation` MUST
+     * NOT leak out of `afterEvaluation`. Downstream hook stages (and other
+     * hooks in the chain) should never see OpenTelemetry objects in `$data`.
+     */
+    public function testDataKeysNotLeakedAfterAfterEvaluation(): void
+    {
+        $result    = $this->runLifecycleWithParent(new TracingHookOptions(addSpans: true));
+        $afterData = $result['afterData'];
+
+        $this->assertArrayNotHasKey('__ld_otel_span', $afterData);
+        $this->assertArrayNotHasKey('__ld_otel_scope', $afterData);
     }
 }

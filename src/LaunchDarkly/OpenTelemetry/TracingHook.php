@@ -10,8 +10,10 @@ use LaunchDarkly\Hooks\Hook;
 use LaunchDarkly\Hooks\Metadata;
 use OpenTelemetry\API\Globals;
 use OpenTelemetry\API\Trace\Span;
+use OpenTelemetry\API\Trace\SpanInterface;
 use OpenTelemetry\API\Trace\TracerInterface;
 use OpenTelemetry\Context\Context;
+use OpenTelemetry\Context\ScopeInterface;
 
 /**
  * LaunchDarkly feature flag evaluation hook that enriches OpenTelemetry spans
@@ -38,6 +40,24 @@ use OpenTelemetry\Context\Context;
  *
  * When no span is active, the hook is a no-op.
  *
+ * Experimental: when {@see TracingHookOptions::$addSpans} is enabled,
+ * `beforeEvaluation` also creates a dedicated OpenTelemetry span named
+ * `LDClient.<method>` (where `<method>` is the raw variation method name,
+ * e.g. `variation`, `variationDetail`, `migrationVariation`) that wraps the
+ * variation call. The wrapper span carries only the `feature_flag.key` and
+ * `feature_flag.context.id` attributes; all other attributes remain on the
+ * `feature_flag` span event. `afterEvaluation` detaches the wrapper span's
+ * context and ends it BEFORE attaching the `feature_flag` event, so the
+ * event lands on the caller's surrounding span rather than on the wrapper.
+ *
+ * The wrapper span and the scope used to restore the caller's context are
+ * threaded between `beforeEvaluation` and `afterEvaluation` through the
+ * hook `$data` array under the reserved keys identified by the
+ * {@see self::DATA_KEY_SPAN} and {@see self::DATA_KEY_SCOPE} class
+ * constants. Other hooks must not write to those keys. On exit from
+ * `afterEvaluation` the keys are removed from `$data` so downstream stages
+ * are not surprised by OpenTelemetry objects in their inputs.
+ *
  * The hook is registered on an `LDClient` via the SDK's hooks configuration
  * and is safe to share across threads/requests.
  *
@@ -50,11 +70,25 @@ final class TracingHook extends Hook
     private const EVENT_NAME  = 'feature_flag';
 
     /**
-     * Stored for future use — the `addSpans` experimental feature will create
-     * spans through this tracer. Currently unused by `afterEvaluation`, which
-     * only adds events to the already-active span.
-     *
-     * @psalm-suppress UnusedProperty
+     * Reserved `$data` key under which the experimental `addSpans` path
+     * stashes the wrapper `SpanInterface` for later teardown. Exposed as a
+     * class constant rather than a literal string so that collisions with
+     * other hooks are easy to audit.
+     */
+    private const DATA_KEY_SPAN  = '__ld_otel_span';
+
+    /**
+     * Reserved `$data` key under which the experimental `addSpans` path
+     * stashes the `ScopeInterface` returned by
+     * `Context::storage()->attach(...)`. Detaching this scope restores the
+     * caller's context so the `feature_flag` event can attach to the
+     * caller's span instead of the wrapper span.
+     */
+    private const DATA_KEY_SCOPE = '__ld_otel_scope';
+
+    /**
+     * Tracer used by the experimental `addSpans` path to create wrapper
+     * spans around each variation call. Unused when `addSpans` is disabled.
      */
     private readonly TracerInterface $tracer;
 
@@ -67,10 +101,10 @@ final class TracingHook extends Hook
 
     /**
      * @param TracingHookOptions   $options Configuration object controlling optional attributes and features.
-     * @param TracerInterface|null $tracer  Tracer used for future span-creation features. When `null`, a
-     *                                      tracer named `launchdarkly` is acquired from the global
-     *                                      OpenTelemetry tracer provider. Primarily an injection point for
-     *                                      tests.
+     * @param TracerInterface|null $tracer  Tracer used by the experimental `addSpans` path to create wrapper
+     *                                      spans for every variation call. When `null`, a tracer named
+     *                                      `launchdarkly` is acquired from the global OpenTelemetry tracer
+     *                                      provider. Primarily an injection point for tests.
      */
     public function __construct(
         TracingHookOptions $options = new TracingHookOptions(),
@@ -87,6 +121,54 @@ final class TracingHook extends Hook
     }
 
     /**
+     * Experimental. When {@see TracingHookOptions::$addSpans} is enabled,
+     * start a wrapper span named `LDClient.<method>` around the upcoming
+     * variation call and attach its context so subsequent work is nested
+     * beneath it. The wrapper span carries only the two required attributes
+     * from spec §1.2.3.4–5 (`feature_flag.key` and `feature_flag.context.id`).
+     *
+     * The span and the scope used to detach its context are stashed under
+     * {@see self::DATA_KEY_SPAN} and {@see self::DATA_KEY_SCOPE} in the
+     * returned `$data` so `afterEvaluation` can tear them down in the
+     * correct order.
+     *
+     * When `addSpans` is disabled, `$data` is returned unchanged.
+     *
+     * The span name is the raw PHP SDK method string (`variation`,
+     * `variationDetail`, `migrationVariation`), which yields
+     * `LDClient.variation` and friends. This is a PHP-specific divergence
+     * from spec §1.2.3.6's PascalCase examples; aligning the method-name
+     * casing is a concern for the core PHP Server-Side SDK and is tracked
+     * separately.
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    #[\Override]
+    public function beforeEvaluation(
+        EvaluationSeriesContext $seriesContext,
+        array $data,
+    ): array {
+        if (!$this->options->addSpans) {
+            return $data;
+        }
+
+        $span = $this->tracer
+            ->spanBuilder('LDClient.' . $seriesContext->method)
+            ->setAttributes([
+                Attributes::FEATURE_FLAG_KEY        => $seriesContext->flagKey,
+                Attributes::FEATURE_FLAG_CONTEXT_ID => $seriesContext->context->getFullyQualifiedKey(),
+            ])
+            ->startSpan();
+
+        $scope = Context::storage()->attach($span->storeInContext(Context::getCurrent()));
+
+        $data[self::DATA_KEY_SPAN]  = $span;
+        $data[self::DATA_KEY_SCOPE] = $scope;
+        return $data;
+    }
+
+    /**
      * @param array<string, mixed> $data
      * @return array<string, mixed>
      */
@@ -96,6 +178,24 @@ final class TracingHook extends Hook
         array $data,
         EvaluationDetail $detail,
     ): array {
+        // Spec §1.2.3.2: if the experimental `addSpans` path started a
+        // wrapper span in `beforeEvaluation`, tear it down BEFORE looking up
+        // the current span. Detaching the scope pops the wrapper off the
+        // active context so the `feature_flag` event below attaches to the
+        // caller's surrounding span instead of the wrapper. The order
+        // (detach → end → read current span) matters — ending before
+        // detaching would leave a closed span on top of the active context,
+        // and reading the current span before detaching would return the
+        // wrapper itself.
+        if (isset($data[self::DATA_KEY_SPAN], $data[self::DATA_KEY_SCOPE])
+            && $data[self::DATA_KEY_SPAN] instanceof SpanInterface
+            && $data[self::DATA_KEY_SCOPE] instanceof ScopeInterface
+        ) {
+            $data[self::DATA_KEY_SCOPE]->detach();
+            $data[self::DATA_KEY_SPAN]->end();
+            unset($data[self::DATA_KEY_SPAN], $data[self::DATA_KEY_SCOPE]);
+        }
+
         $span = Span::fromContext(Context::getCurrent());
 
         // Spec §1.2.2.1.1: if the surrounding span context is not valid (no
