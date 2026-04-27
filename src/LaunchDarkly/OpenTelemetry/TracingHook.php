@@ -100,11 +100,18 @@ final class TracingHook extends Hook
     private readonly TracingHookOptions $options;
 
     /**
-     * @param TracingHookOptions   $options Configuration object controlling optional attributes and features.
-     * @param TracerInterface|null $tracer  Tracer used by the experimental `addSpans` path to create wrapper
-     *                                      spans for every variation call. When `null`, a tracer named
-     *                                      `launchdarkly` is acquired from the global OpenTelemetry tracer
-     *                                      provider. Primarily an injection point for tests.
+     * Construct a tracing hook.
+     *
+     * @param TracingHookOptions   $options Configuration for the optional attributes emitted on the
+     *                                      `feature_flag` event and for the experimental `addSpans`
+     *                                      wrapper-span behavior. Defaults to an options object with
+     *                                      all optional features disabled.
+     * @param TracerInterface|null $tracer  Tracer used by the experimental `addSpans` path to create
+     *                                      wrapper spans for every variation call. When `null`, a
+     *                                      tracer named `launchdarkly` is acquired from the global
+     *                                      OpenTelemetry tracer provider via
+     *                                      {@see Globals::tracerProvider()}. Primarily a test injection
+     *                                      point; production callers should leave this `null`.
      */
     public function __construct(
         TracingHookOptions $options = new TracingHookOptions(),
@@ -114,6 +121,18 @@ final class TracingHook extends Hook
         $this->tracer  = $tracer ?? Globals::tracerProvider()->getTracer(self::TRACER_NAME);
     }
 
+    /**
+     * Return the hook's identification metadata.
+     *
+     * The name is used by the LaunchDarkly SDK when it logs errors raised
+     * from this hook so the offending hook can be identified among the
+     * (possibly many) registered hooks.
+     *
+     * @return Metadata Metadata whose `name` is the fixed string
+     *                  `"LaunchDarkly Tracing Hook"`.
+     *
+     * @see \LaunchDarkly\Hooks\Hook::getMetadata()
+     */
     #[\Override]
     public function getMetadata(): Metadata
     {
@@ -169,8 +188,38 @@ final class TracingHook extends Hook
     }
 
     /**
-     * @param array<string, mixed> $data
-     * @return array<string, mixed>
+     * Attach a `feature_flag` span event to the currently active span
+     * describing the evaluation that just completed.
+     *
+     * Runs in this order:
+     *
+     *   1. If {@see TracingHookOptions::$addSpans} is enabled and
+     *      `beforeEvaluation` stashed a wrapper span and scope under the
+     *      reserved `$data` keys, detach the scope then end the wrapper
+     *      span. This MUST happen before step 2 so the event below lands
+     *      on the caller's surrounding span, not on our wrapper.
+     *   2. Look up the currently active span. Per spec §1.2.2.1.1, if the
+     *      span context is invalid (no active span, or a
+     *      `NonRecordingSpan` with an invalid context), return without
+     *      emitting anything.
+     *   3. Build the attribute map: the three required attributes always,
+     *      plus the optional attributes whose spec-defined gates are
+     *      satisfied (§1.2.2.6 / §1.2.2.9 / §1.2.2.10 / §1.2.2.11).
+     *   4. Call `Span::addEvent('feature_flag', $attributes)`.
+     *
+     * The reserved `$data` keys are removed before returning so downstream
+     * hook stages do not observe OpenTelemetry objects in their inputs.
+     *
+     * @param EvaluationSeriesContext $seriesContext  Flag key, context, and method for the evaluation.
+     * @param array<string, mixed>    $data           Hook state threaded from `beforeEvaluation`; may
+     *                                                contain the reserved keys
+     *                                                {@see self::DATA_KEY_SPAN} and
+     *                                                {@see self::DATA_KEY_SCOPE} when `addSpans` is on.
+     * @param EvaluationDetail        $detail         Evaluation result — drives the optional attributes.
+     *
+     * @return array<string, mixed> The `$data` array with the reserved keys stripped.
+     *
+     * @see \LaunchDarkly\Hooks\Hook::afterEvaluation()
      */
     #[\Override]
     public function afterEvaluation(
@@ -250,7 +299,9 @@ final class TracingHook extends Hook
      * Serialize an evaluated flag value into a string suitable for the
      * `feature_flag.result.value` span-event attribute.
      *
-     * The rules are (item B of the epic plan):
+     * Per OpenTelemetry semantic conventions for feature flags, the value
+     * attribute must always be a string regardless of the flag's actual
+     * PHP type. The rules are:
      *
      *   - `bool` → the literal strings `"true"` / `"false"`
      *   - `int` or `float` → `(string) $value`
@@ -259,6 +310,11 @@ final class TracingHook extends Hook
      *   - `array` or `object` → `json_encode($value, JSON_THROW_ON_ERROR)`,
      *     falling back to `"null"` on encode failure
      *   - anything else (resource, closure, etc.) → `"null"`
+     *
+     * @param mixed $value The raw evaluated flag value from
+     *                     {@see EvaluationDetail::getValue()}.
+     *
+     * @return string Always a string; never throws.
      */
     private static function serializeValue(mixed $value): string
     {
