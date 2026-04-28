@@ -12,6 +12,7 @@
         {"type": "fix", "section": "Bug Fixes"}
       ],
       "extra-files": [
+        ".github/actions/build-docs/action.yml",
         "src/LaunchDarkly/OpenTelemetry/Package.php"
       ]
     }

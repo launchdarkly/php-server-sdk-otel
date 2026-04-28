@@ -1,0 +1,30 @@
+name: Build Documentation
+description: 'Build Documentation.'
+
+runs:
+  using: composite
+  steps:
+    - name: Setup PHP
+      uses: shivammathur/setup-php@e6f75134d35752277f093989e72e140eaa222f35
+      with:
+        php-version: '8.1'
+        tools: composer:v2, phpdoc:3.3.1
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Install dependencies
+      shell: bash
+      run: composer install --no-progress --no-dev
+
+    - name: Build Documentation
+      shell: bash
+      run: |
+        phpdoc \
+          -d src \
+          -t "docs" \
+          --ignore-tags psalm-param \
+          --ignore-tags psalm-var \
+          --ignore-tags psalm-return \
+          --visibility public \
+          --defaultpackagename "LaunchDarkly" \
+          --title "LaunchDarkly PHP OpenTelemetry integration 0.1.0" # x-release-please-version
