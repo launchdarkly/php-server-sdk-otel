@@ -87,7 +87,7 @@ When `$client->variation(...)` runs inside the active span, the hook attaches a 
 | --- | --- | --- | --- |
 | `includeValue` | `bool` | `false` | When `true`, attaches the serialized evaluated flag value as `feature_flag.result.value`. Be mindful of cardinality and sensitivity before enabling this in production. |
 | `addSpans` | `bool` | `false` | **Experimental.** When `true`, wraps every variation call in an `LDClient.<method>` child span in addition to the event. The exact span structure and naming may change in future releases. |
-| `environmentId` | `string\|null` | `null` | Emitted as `feature_flag.set.id`. Empty or whitespace-only input is rejected and stored as `null` (a warning is logged if a `logger` is supplied). See [Known limitations](#known-limitations). |
+| `environmentId` | `string\|null` | `null` | Emitted as `feature_flag.set.id`. Takes precedence over the environment ID the LaunchDarkly SDK supplies via `EvaluationSeriesContext`; leave `null` to use the SDK-supplied value when one is available. Empty or whitespace-only input is rejected and stored as `null` (a warning is logged if a `logger` is supplied). |
 | `logger` | `Psr\Log\LoggerInterface\|null` | `null` | Receives construction-time warnings from the options object (for example, an invalid `environmentId`). When `null`, no diagnostic output is produced. |
 
 Example:
@@ -122,7 +122,7 @@ Optional attributes (emitted only when the corresponding condition is met):
 | `feature_flag.result.value` | `TracingHookOptions::$includeValue` is `true`. Always serialized to a string; `bool` becomes `"true"`/`"false"`, `null` becomes `"null"`, and arrays/objects are JSON-encoded. |
 | `feature_flag.result.variationIndex` | The evaluation produced a non-null variation index. Emitted as an integer, including the value `0`. |
 | `feature_flag.result.reason.inExperiment` | The evaluation reason has `inExperiment=true`. When `false`, the attribute is omitted entirely rather than emitted as `false`. |
-| `feature_flag.set.id` | `TracingHookOptions::$environmentId` is configured with a non-empty string. |
+| `feature_flag.set.id` | `TracingHookOptions::$environmentId` is configured with a non-empty string, or the LaunchDarkly SDK supplies an environment ID on `EvaluationSeriesContext`. The configured value takes precedence. |
 
 When `addSpans=true`, the wrapper `LDClient.<method>` span carries only `feature_flag.key` and `feature_flag.context.id`; all other attributes remain on the `feature_flag` event on the caller's surrounding span.
 
@@ -147,8 +147,7 @@ Worker pools (RoadRunner, Swoole, and similar) keep the PHP process alive across
 
 ## Known limitations
 
-1. `feature_flag.set.id` is emitted only when the environment ID is supplied via `TracingHookOptions`. The alternative path — where the SDK would pass the environment ID through `EvaluationSeriesContext` per the [LaunchDarkly OTEL integration specification][spec] — is not yet supported, because the LaunchDarkly PHP Server-Side SDK does not currently expose an environment ID on `EvaluationSeriesContext`. Configuring `environmentId` on the options is the supported way to emit `feature_flag.set.id` today.
-2. When `addSpans=true`, the wrapper span name is built from the PHP SDK method string (`variation`, `variationDetail`, `migrationVariation`), producing `LDClient.variation`, `LDClient.variationDetail`, and `LDClient.migrationVariation`. Aligning the casing with other LaunchDarkly SDKs is a concern for the core PHP Server-Side SDK and is tracked separately.
+When `addSpans=true`, the wrapper span name is built from the PHP SDK method string (`variation`, `variationDetail`, `migrationVariation`), producing `LDClient.variation`, `LDClient.variationDetail`, and `LDClient.migrationVariation`. Aligning the casing with other LaunchDarkly SDKs is a concern for the core PHP Server-Side SDK and is tracked separately.
 
 [spec]: https://github.com/launchdarkly/sdk-meta/blob/main/api/otel-integration.md
 
