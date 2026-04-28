@@ -1,6 +1,7 @@
 {
   "packages": {
     ".": {
+      "release-as": "0.1.0",
       "release-type": "php",
       "bump-minor-pre-major": true,
       "versioning": "default",
