@@ -1,11 +1,8 @@
-<!--
-Badges (Packagist, Run CI, GitHub Pages documentation) will be added in a
-follow-up change once this repository exists on GitHub and the first
-release has been tagged. Shipping broken image links in the meantime is
-worse than shipping no badges at all.
--->
-
 # LaunchDarkly Server-Side SDK for PHP — OpenTelemetry integration
+
+[![Run CI](https://github.com/launchdarkly/php-server-sdk-otel/actions/workflows/ci.yml/badge.svg)](https://github.com/launchdarkly/php-server-sdk-otel/actions/workflows/ci.yml)
+[![Packagist](https://img.shields.io/packagist/v/launchdarkly/server-sdk-otel.svg?style=flat-square)](https://packagist.org/packages/launchdarkly/server-sdk-otel)
+[![Documentation](https://img.shields.io/static/v1?label=GitHub+Pages&message=API+reference&color=00add8)](https://launchdarkly.github.io/php-server-sdk-otel)
 
 ## LaunchDarkly overview
 
