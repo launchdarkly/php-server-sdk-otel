@@ -1,5 +1,7 @@
 # Changelog
 
+All notable changes to the project will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
+
 ## 0.1.0 (2026-04-28)
 
 
@@ -11,7 +13,3 @@
 * add TracingHookOptions and attribute constants ([#4](https://github.com/launchdarkly/php-server-sdk-otel/issues/4)) ([ae33939](https://github.com/launchdarkly/php-server-sdk-otel/commit/ae33939bfb5f53a46ef1b46f9843246a7483506c))
 * emit feature_flag.set.id when environmentId is configured ([#7](https://github.com/launchdarkly/php-server-sdk-otel/issues/7)) ([26b6670](https://github.com/launchdarkly/php-server-sdk-otel/commit/26b6670befa6d84b421f15f4a3ca333d37d4cfd6))
 * honor environmentId from EvaluationSeriesContext ([#13](https://github.com/launchdarkly/php-server-sdk-otel/issues/13)) ([d761dcb](https://github.com/launchdarkly/php-server-sdk-otel/commit/d761dcb01ac961bbd38a7cdb9b141e435bd005ad))
-
-## Change log
-
-All notable changes to the project will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
