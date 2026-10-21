@@ -16,7 +16,7 @@ Reach for this package when you already have OpenTelemetry instrumentation in pl
 
 ## Supported PHP versions
 
-This package supports PHP 8.2, 8.3, 8.4, and 8.5. It is safe to use under any PHP SAPI (CLI, PHP-FPM, long-running worker pools); see [PHP-FPM and short-lived request lifecycles](#php-fpm-and-short-lived-request-lifecycles) for guidance on flushing spans in request-response environments.
+This package supports PHP 8.2, 8.3, and 8.4. It is safe to use under any PHP SAPI (CLI, PHP-FPM, long-running worker pools); see [PHP-FPM and short-lived request lifecycles](#php-fpm-and-short-lived-request-lifecycles) for guidance on flushing spans in request-response environments.
 
 | PHP SAPI | Supported | Notes |
 | --- | --- | --- |
