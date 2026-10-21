@@ -16,7 +16,7 @@
         }
     ],
     "require": {
-        "php": ">=8.1",
+        "php": ">=8.2",
         "launchdarkly/server-sdk": "^6.8",
         "open-telemetry/api": "^1.0",
         "psr/log": "^1.0|^2.0|^3.0"
