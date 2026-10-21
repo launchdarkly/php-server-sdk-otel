@@ -2,6 +2,13 @@
 
 All notable changes to the project will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [0.2.0](https://github.com/launchdarkly/php-server-sdk-otel/compare/0.1.0...0.2.0) (2026-10-21)
+
+
+### Features
+
+* Require PHP 8.2 or later ([#19](https://github.com/launchdarkly/php-server-sdk-otel/issues/19)) ([7c6a7e9](https://github.com/launchdarkly/php-server-sdk-otel/commit/7c6a7e9b2e7d45d1a61f616e54c8744e7d290c25))
+
 ## 0.1.0 (2026-04-28)
 
 

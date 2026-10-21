@@ -22,5 +22,5 @@ final class Package
      * Current version of the launchdarkly/server-sdk-otel package. Kept in
      * sync with the Packagist release tag by release-please.
      */
-    public const VERSION = '0.1.0'; // x-release-please-version
+    public const VERSION = '0.2.0'; // x-release-please-version
 }
