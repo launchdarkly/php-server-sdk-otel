@@ -27,4 +27,4 @@ runs:
           --ignore-tags psalm-return \
           --visibility public \
           --defaultpackagename "LaunchDarkly" \
-          --title "LaunchDarkly PHP OpenTelemetry integration 0.1.0" # x-release-please-version
+          --title "LaunchDarkly PHP OpenTelemetry integration 0.2.0" # x-release-please-version
